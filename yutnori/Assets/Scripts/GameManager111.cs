@@ -6,24 +6,6 @@ using TMPro;
 using Unity.VisualScripting;
 using UnityEngine;
 
-public enum Yut
-{
-    [Description("µÞµµ")]
-    BackDo = -1,
-    [Description("³«")]
-    Nack = 0,
-    [Description("µµ")]
-    Do = 1,
-    [Description("°³")]
-    Gae = 2,
-    [Description("°É")]
-    Gul = 3,
-    [Description("À·")]
-    Yut = 4,
-    [Description("¸ð")]
-    Mo = 5
-}
-
 class Player
 {
     public bool isThrowButtonClicked;
