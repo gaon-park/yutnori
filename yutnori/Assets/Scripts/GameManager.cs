@@ -1,5 +1,6 @@
 using Photon.Pun;
 using Photon.Realtime;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using Unity.VisualScripting;
@@ -13,8 +14,10 @@ public class GameManager : MonoBehaviourPun
     public List<GameObject> players = new();
     public List<TMP_Text> playerChatTxt = new();
     public TMP_InputField inputField;
-    
-    private Dictionary<int, int> activeToPlayerIdx = new();
+
+    private string roomName;
+    private int localPlayerIdx;
+    private static readonly float txtWaitTime = 3.0f;
 
     private void Awake()
     {
@@ -31,22 +34,17 @@ public class GameManager : MonoBehaviourPun
     void Start()
     {
         PhotonNetwork.IsMessageQueueRunning = true;
-
-        // 캐릭터들 보여주기
-        Debug.Log("count: " + PhotonNetwork.PlayerList.Length);
-        foreach (Photon.Realtime.Player p in PhotonNetwork.PlayerList)
-        {
-            AddPlayer(p);
-        }
-        photonView.RPC("AddPlayer", RpcTarget.OthersBuffered, PhotonNetwork.LocalPlayer);
+        roomName = PhotonNetwork.CurrentRoom.Name;
+        localPlayerIdx = PhotonNetwork.LocalPlayer.ActorNumber - 1;
+        photonView.RPC("SetPlayerActive", RpcTarget.OthersBuffered, roomName, localPlayerIdx);
+        SetPlayerActive(roomName, localPlayerIdx);
     }
 
     [PunRPC]
-    void AddPlayer(Photon.Realtime.Player player)
+    void SetPlayerActive(string room, int playerIdx)
     {
-        int idx = activeToPlayerIdx.Count;
-        players[idx].SetActive(true);
-        activeToPlayerIdx.Add(player.ActorNumber, idx);
+        if (!roomName.Equals(room)) return;
+        players[playerIdx].SetActive(true);
     }
 
     void Update()
@@ -61,15 +59,32 @@ public class GameManager : MonoBehaviourPun
             return;
 
         string msg = inputField.text;
-        photonView.RPC("ReceiveMsg", RpcTarget.OthersBuffered, PhotonNetwork.LocalPlayer.ActorNumber, msg);
-        ReceiveMsg(activeToPlayerIdx[PhotonNetwork.LocalPlayer.ActorNumber], msg);
+        photonView.RPC("ReceiveMsg", RpcTarget.OthersBuffered, localPlayerIdx, msg);
+        ReceiveMsg(localPlayerIdx, msg);
         inputField.ActivateInputField();
         inputField.text = "";
+
+        StartCoroutine(TxtTimerCoroutine());
+    }
+
+    public IEnumerator TxtTimerCoroutine()
+    {
+        yield return new WaitForSeconds(txtWaitTime);
+        DestroyMsg(localPlayerIdx);
+        photonView.RPC("DestroyMsg", RpcTarget.OthersBuffered, localPlayerIdx);
     }
 
     [PunRPC]
     public void ReceiveMsg(int idx, string msg)
     {
         playerChatTxt[idx].text = msg;
+        playerChatTxt[idx].transform.parent.gameObject.SetActive(true);
+    }
+
+    [PunRPC]
+    public void DestroyMsg(int idx)
+    {
+        playerChatTxt[idx].text = "";
+        playerChatTxt[idx].transform.parent.gameObject.SetActive(false);
     }
 }

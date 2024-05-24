@@ -86,7 +86,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks
 
         foreach (RoomInfo roomInfo in roomList)
         {
-            if (!roomCountMap.ContainsKey(roomInfo.Name) || !roomCountTextMap.ContainsKey(roomInfo.Name) || !roomButtonMap.ContainsKey(roomInfo.Name)) 
+            if (!roomCountMap.ContainsKey(roomInfo.Name) || !roomCountTextMap.ContainsKey(roomInfo.Name) || !roomButtonMap.ContainsKey(roomInfo.Name))
             {
                 GameObject room = Instantiate(roomTemplate, LobbyScrollContent);
 
