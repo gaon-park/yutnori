@@ -8,6 +8,7 @@ using TMPro;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.UI;
+using WebSocketSharp;
 using Hashtable = ExitGames.Client.Photon.Hashtable;
 
 public enum Yut
@@ -41,11 +42,9 @@ public class GameManager : MonoBehaviourPunCallbacks
     public GameObject throwField;
     public Button throwButton;
     
-    #region 기록
     public List<Button> history = new();
-    public List<TMP_Text> historyTxt = new();
-    public List<TMP_Text> historyCount = new();
-    #endregion
+
+    private Dictionary<int, int> currentYuts = new();
 
     private System.Random random = new();
     private string roomName;
@@ -60,6 +59,7 @@ public class GameManager : MonoBehaviourPunCallbacks
 
     private int turn = -1; // 현재 턴의 playerIdx
     private bool isStarted; // 게임 시작
+    private bool isThrowing = false;
 
     private void Awake()
     {
@@ -163,7 +163,8 @@ public class GameManager : MonoBehaviourPunCallbacks
         // 게임 진행
         if (isStarted)
         {
-            throwButton.interactable = turn == localPlayerIdx;
+            if (!isThrowing)
+                throwButton.interactable = turn == localPlayerIdx;
 
 
         }
@@ -171,10 +172,45 @@ public class GameManager : MonoBehaviourPunCallbacks
 
     public void OnClickThrowButton()
     {
+        isThrowing = true;
         throwButton.interactable = false;
         int randomNumber = random.Next(minYut, maxYut + 1);
         photonView.RPC("RPCThrowYut", RpcTarget.All, randomNumber);
-        
+
+        Yut yut = (Yut)Enum.Parse(typeof(Yut), randomNumber.ToString());
+        if (yut.Equals(Yut.Nack) || (currentYuts.Count == 0 && yut.Equals(Yut.BackDo))) return;
+
+        if (currentYuts.ContainsKey(randomNumber)) currentYuts[randomNumber]++;
+        else currentYuts.Add(randomNumber, 1);
+
+        string descriptName = GetEnumDescription(yut);
+        int idx = 0;
+        string count = "";
+        for (int i = 0; i < history.Count; i++)
+        {
+            string txt = history[i].transform.GetChild(0).GetComponent<TMP_Text>().text;
+            // 가장 먼저 만나는 히스토리 객체가 비어있다면
+            if (txt.IsNullOrEmpty())
+            {
+                idx = i;
+                count = currentYuts[randomNumber] == 1 ? "" : "x" + currentYuts[randomNumber];
+                break;
+            }
+            else if (txt.Equals(descriptName))
+            {
+                idx = i;
+                count = "x" + currentYuts[randomNumber];
+                break;
+            }
+        }
+        photonView.RPC("SetHistory", RpcTarget.All, idx, descriptName, count);
+    }
+
+    [PunRPC]
+    private void SetHistory(int idx, string str, string count)
+    {
+        history[idx].transform.GetChild(0).GetComponent<TMP_Text>().text = str;
+        history[idx].transform.GetChild(1).GetComponent<TMP_Text>().text = count;
     }
 
     [PunRPC]
@@ -183,8 +219,8 @@ public class GameManager : MonoBehaviourPunCallbacks
         Yut yut = (Yut)Enum.Parse(typeof(Yut), yutNum.ToString());
         throwField.SetActive(true);
         throwField.GetComponentInChildren<TMP_Text>().text = GetEnumDescription(yut);
+        
         StartCoroutine(TimerCoroutine(false));
-
     }
 
     public void SendButtonOnClicked()
@@ -197,6 +233,7 @@ public class GameManager : MonoBehaviourPunCallbacks
         inputField.ActivateInputField();
         inputField.text = "";
 
+        // 2초 뒤 윷 던지기 필드 사라지게
         StartCoroutine(TimerCoroutine(true));
     }
 
