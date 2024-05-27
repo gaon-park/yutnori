@@ -3,10 +3,12 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Reflection;
 using TMPro;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.UI;
+using Hashtable = ExitGames.Client.Photon.Hashtable;
 
 public enum Yut
 {
@@ -26,32 +28,6 @@ public enum Yut
     Mo = 5
 }
 
-class UserPlay
-{
-    public List<GameObject> markers; // 전체 말 오브젝트
-    public List<bool> goalFlags; // 말이 골인했는가?
-    public List<Yut> currentYuts; // 이번 턴에 움직일 수 있는 윷 결과
-
-    public TMP_Text info;
-    public int actorNumber;
-    public bool isReady = false;
-    public TMP_Text readyTxt;
-
-    public UserPlay(
-        List<GameObject> markers,
-        List<bool> goalFlags,
-        List<Yut> currentYuts,
-        TMP_Text info,
-        int actorNumber)
-    {
-        this.markers = markers;
-        this.goalFlags = goalFlags;
-        this.currentYuts = currentYuts;
-        this.info = info;
-        this.actorNumber = actorNumber;
-    }
-}
-
 public class GameManager : MonoBehaviourPunCallbacks
 {
     public static GameManager instance { get; private set; }
@@ -64,16 +40,24 @@ public class GameManager : MonoBehaviourPunCallbacks
     public GameObject startField;
     public GameObject throwField;
     public Button throwButton;
+    
+    #region 기록
+    public List<Button> history = new();
+    public List<TMP_Text> historyTxt = new();
+    public List<TMP_Text> historyCount = new();
+    #endregion
 
     private System.Random random = new();
     private string roomName;
     private int localPlayerIdx;
+    private Dictionary<int, bool> isReady = new();
+
+    private static readonly float THROW_FIELD_TIME_WAIT = 2.0f;
     private static readonly float TXT_TIME_WAIT = 3.0f;
     private static readonly int MAX_MARKER_COUNT = 4;
     private static readonly int minYut = -1;
     private static readonly int maxYut = 5;
 
-    private Dictionary<int, UserPlay> userPlays = new();
     private int turn = -1; // 현재 턴의 playerIdx
     private bool isStarted; // 게임 시작
 
@@ -95,59 +79,67 @@ public class GameManager : MonoBehaviourPunCallbacks
         roomName = PhotonNetwork.CurrentRoom.Name;
         localPlayerIdx = PhotonNetwork.LocalPlayer.ActorNumber - 1;
 
-        throwButton.onClick.AddListener(ThrowYut);
-
         photonView.RPC("SetPlayerActive", RpcTarget.OthersBuffered, roomName, localPlayerIdx);
         SetPlayerActive(roomName, localPlayerIdx);
+
+        // 준비 버튼 설정
+        Button readyButton = startField.GetComponentInChildren<Button>();
+        TMP_Text txt = readyButton.GetComponentInChildren<TMP_Text>();
+        // 유저가 방의 마스터인 경우
+        if (PhotonNetwork.LocalPlayer.IsMasterClient)
+        {
+            txt.text = "시작";
+        }
+        // 참가자인 경우
+        else
+        {
+            readyButton.interactable = true;
+            txt.text = "준비";
+        }
     }
 
     public void OnClickReady()
     {
         // 유저가 방의 마스터인 경우
-        if (PhotonNetwork.MasterClient.ActorNumber == PhotonNetwork.LocalPlayer.ActorNumber)
+        if (PhotonNetwork.LocalPlayer.IsMasterClient)
         {
-            if (PhotonNetwork.CurrentRoom.PlayerCount < 2) return;
-            foreach (var player in PhotonNetwork.CurrentRoom.Players)
+            if (isReady.Count == PhotonNetwork.CurrentRoom.PlayerCount - 1) 
             {
-                //if (!players[player.Value.ActorNumber].activeSelf)
-                //    continue;
-                if (player.Value.ActorNumber == PhotonNetwork.MasterClient.ActorNumber)
-                    continue;
-                if (!userPlays[player.Value.ActorNumber - 1].isReady) return;
-                Debug.Log("user " + player.Value.ActorNumber + ": " + userPlays[player.Value.ActorNumber - 1].isReady);
+                photonView.RPC("StartGame", RpcTarget.All, PhotonNetwork.LocalPlayer.ActorNumber, null);
             }
-
-            photonView.RPC("StartGame", RpcTarget.OthersBuffered);
-            StartGame();
         }
         // 참가자인 경우
         else
         {
-            bool changeTo = !userPlays[localPlayerIdx].isReady;
-            photonView.RPC("SetPlayerReadyStatus", RpcTarget.OthersBuffered, localPlayerIdx, changeTo);
-            SetPlayerReadyStatus(localPlayerIdx, changeTo);
-            userPlays[localPlayerIdx].readyTxt.text = userPlays[localPlayerIdx].isReady ? "준비 완료" : "준비";
+            bool ready = !isReady.ContainsKey(PhotonNetwork.LocalPlayer.ActorNumber);
+            string txt = ready ? "준비" : "";
+            photonView.RPC("StartGame", RpcTarget.All, PhotonNetwork.LocalPlayer.ActorNumber, ready);
+            photonView.RPC("SetInfo", RpcTarget.All, localPlayerIdx, txt);
         }
     }
 
     [PunRPC]
-    public void SetPlayerReadyStatus(int playerIdx, bool readyStatus)
+    public void StartGame(int actorNumber, bool? start)
     {
-        userPlays[playerIdx].isReady = readyStatus;
-        userPlays[playerIdx].info.text = readyStatus ? "준비" : "";
-    }
-
-    [PunRPC]
-    public void StartGame()
-    {
-        isStarted = true;
-        startField.SetActive(false);
-        playingField.SetActive(true);
-        foreach (var user in userPlays)
+        if (actorNumber == PhotonNetwork.MasterClient.ActorNumber)
         {
-            user.Value.info.text = "x4";
+            isStarted = true;
+            startField.SetActive(false);
+            playingField.SetActive(true);
+            foreach (var p in players)
+            {
+                if (!p.activeSelf) continue;
+                p.transform.GetChild(1).GetChild(1).GetComponent<TMP_Text>().text = "x4";
+            }
+            turn = 0; // 0번 부터 시작
         }
-        turn = 0; // 0번 부터 시작
+        else
+        {
+            if (start == true)
+                isReady.Add(actorNumber, true);
+            else
+                isReady.Remove(actorNumber);
+        }
     }
 
     [PunRPC]
@@ -155,40 +147,6 @@ public class GameManager : MonoBehaviourPunCallbacks
     {
         if (!roomName.Equals(room)) return;
         players[playerIdx].SetActive(true);
-
-        if (userPlays.ContainsKey(playerIdx)) return;
-
-        List<GameObject> markers = new();
-        TMP_Text info = null;
-        foreach (var img in players[playerIdx].GetComponentsInChildren<Image>())
-        {
-            if (img.gameObject.name.StartsWith("marker"))
-            {
-                markers.Add(img.gameObject);
-            }
-            else if (img.gameObject.name.Equals("player icon"))
-            {
-                info = img.gameObject.transform.Find("info").GetComponent<TMP_Text>();
-            }
-        }
-
-        // 준비 버튼 설정
-        Button readyButton = startField.GetComponentInChildren<Button>();
-        TMP_Text txt = readyButton.GetComponentInChildren<TMP_Text>();
-        // 유저가 방의 마스터인 경우
-        if (PhotonNetwork.MasterClient.ActorNumber == PhotonNetwork.LocalPlayer.ActorNumber)
-        {
-            txt.text = "시작";
-        }
-        // 참가자인 경우
-        else
-        {
-            readyButton.enabled = true;
-            txt.text = "준비";
-        }
-
-        userPlays.Add(playerIdx, new(markers, new() { false, false, false, false }, new() { }, info, playerIdx + 1));
-        userPlays[playerIdx].readyTxt = txt;
     }
 
     void Update()
@@ -196,25 +154,37 @@ public class GameManager : MonoBehaviourPunCallbacks
         if (!inputField.isFocused && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
             SendButtonOnClicked();
 
+        // 방장 시작 버튼 활성/비활성
+        if (PhotonNetwork.LocalPlayer.IsMasterClient)
+        {
+            startField.GetComponentInChildren<Button>().interactable = PhotonNetwork.CurrentRoom.PlayerCount > 1 && isReady.Count + 1 == PhotonNetwork.CurrentRoom.PlayerCount;
+        }
+
         // 게임 진행
         if (isStarted)
         {
-            throwButton.enabled = turn == localPlayerIdx;
+            throwButton.interactable = turn == localPlayerIdx;
+
+
         }
     }
 
-    public void ThrowYut()
+    public void OnClickThrowButton()
     {
-        photonView.RPC("RPCThrowYut", RpcTarget.OthersBuffered);
-        RPCThrowYut();
+        throwButton.interactable = false;
+        int randomNumber = random.Next(minYut, maxYut + 1);
+        photonView.RPC("RPCThrowYut", RpcTarget.All, randomNumber);
+        
     }
 
-    public void RPCThrowYut()
+    [PunRPC]
+    public void RPCThrowYut(int yutNum)
     {
-        int randomNumber = random.Next(minYut, maxYut + 1);
-        Yut yut = (Yut)Enum.Parse(typeof(Yut), randomNumber.ToString());
+        Yut yut = (Yut)Enum.Parse(typeof(Yut), yutNum.ToString());
         throwField.SetActive(true);
         throwField.GetComponentInChildren<TMP_Text>().text = GetEnumDescription(yut);
+        StartCoroutine(TimerCoroutine(false));
+
     }
 
     public void SendButtonOnClicked()
@@ -223,30 +193,43 @@ public class GameManager : MonoBehaviourPunCallbacks
             return;
 
         string msg = inputField.text;
-        photonView.RPC("ReceiveMsg", RpcTarget.OthersBuffered, localPlayerIdx, msg);
-        ReceiveMsg(localPlayerIdx, msg);
+        photonView.RPC("ReceiveMsg", RpcTarget.All, localPlayerIdx, msg);
         inputField.ActivateInputField();
         inputField.text = "";
 
-        StartCoroutine(TxtTimerCoroutine());
+        StartCoroutine(TimerCoroutine(true));
     }
 
-    public IEnumerator TxtTimerCoroutine()
+    public IEnumerator TimerCoroutine(bool isChat)
     {
-        yield return new WaitForSeconds(TXT_TIME_WAIT);
-        DestroyMsg(localPlayerIdx);
-        photonView.RPC("DestroyMsg", RpcTarget.OthersBuffered, localPlayerIdx);
+        if (isChat)
+        {
+            yield return new WaitForSeconds(TXT_TIME_WAIT);
+            photonView.RPC("DestroyMsg", RpcTarget.All, localPlayerIdx);
+        }
+        else
+        {
+            yield return new WaitForSeconds(THROW_FIELD_TIME_WAIT);
+            throwField.SetActive(false);
+            throwField.GetComponentInChildren<TMP_Text>().text = "";
+        }
     }
 
     [PunRPC]
-    public void ReceiveMsg(int idx, string msg)
+    private void SetInfo(int idx, string info)
+    {
+        players[idx].transform.GetChild(1).GetChild(1).GetComponent<TMP_Text>().text = info;
+    }
+
+    [PunRPC]
+    private void ReceiveMsg(int idx, string msg)
     {
         playerChatTxt[idx].text = msg;
         playerChatTxt[idx].transform.parent.gameObject.SetActive(true);
     }
 
     [PunRPC]
-    public void DestroyMsg(int idx)
+    private void DestroyMsg(int idx)
     {
         playerChatTxt[idx].text = "";
         playerChatTxt[idx].transform.parent.gameObject.SetActive(false);
@@ -257,5 +240,24 @@ public class GameManager : MonoBehaviourPunCallbacks
         var field = value.GetType().GetField(value.ToString());
         var attribute = (DescriptionAttribute)Attribute.GetCustomAttribute(field, typeof(DescriptionAttribute));
         return attribute != null ? attribute.Description : value.ToString();
+    }
+
+    static T GetEnumValueFromDescription<T>(string description) where T : Enum
+    {
+        foreach (FieldInfo field in typeof(T).GetFields())
+        {
+            if (Attribute.GetCustomAttribute(field, typeof(DescriptionAttribute)) is DescriptionAttribute attribute)
+            {
+                if (attribute.Description == description)
+                    return (T)field.GetValue(null);
+            }
+            else
+            {
+                if (field.Name == description)
+                    return (T)field.GetValue(null);
+            }
+        }
+
+        throw new ArgumentException($"No enum value found for description {description}", nameof(description));
     }
 }
