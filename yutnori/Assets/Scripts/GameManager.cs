@@ -38,10 +38,10 @@ class UserPlay
     public TMP_Text readyTxt;
 
     public UserPlay(
-        List<GameObject> markers, 
-        List<bool> goalFlags, 
-        List<Yut> currentYuts, 
-        TMP_Text info, 
+        List<GameObject> markers,
+        List<bool> goalFlags,
+        List<Yut> currentYuts,
+        TMP_Text info,
         int actorNumber)
     {
         this.markers = markers;
@@ -52,7 +52,7 @@ class UserPlay
     }
 }
 
-public class GameManager : MonoBehaviourPun
+public class GameManager : MonoBehaviourPunCallbacks
 {
     public static GameManager instance { get; private set; }
 
@@ -73,7 +73,7 @@ public class GameManager : MonoBehaviourPun
     private static readonly int minYut = -1;
     private static readonly int maxYut = 5;
 
-    private List<UserPlay> userPlays = new();
+    private Dictionary<int, UserPlay> userPlays = new();
     private int turn = -1; // 현재 턴의 playerIdx
     private bool isStarted; // 게임 시작
 
@@ -94,45 +94,11 @@ public class GameManager : MonoBehaviourPun
         PhotonNetwork.IsMessageQueueRunning = true;
         roomName = PhotonNetwork.CurrentRoom.Name;
         localPlayerIdx = PhotonNetwork.LocalPlayer.ActorNumber - 1;
-        photonView.RPC("SetPlayerActive", RpcTarget.OthersBuffered, roomName, localPlayerIdx);
-        SetPlayerActive(roomName, localPlayerIdx);
 
         throwButton.onClick.AddListener(ThrowYut);
 
-        foreach (var player in players)
-        {
-            List<GameObject> markers = new();
-            TMP_Text info = null;
-            foreach (var img in player.GetComponentsInChildren<Image>())
-            {
-                if (img.gameObject.name.StartsWith("marker"))
-                {
-                    markers.Add(img.gameObject);
-                }
-                else if (img.gameObject.name.Equals("player icon"))
-                {
-                    Debug.Log("11");
-                    info = img.gameObject.transform.Find("info").GetComponent<TMP_Text>();
-                }
-            }
-            userPlays.Add(new(markers, new() { false, false, false, false }, new(), info, PhotonNetwork.LocalPlayer.ActorNumber));
-        }
-
-        // 준비 버튼 설정
-        Button readyButton = startField.GetComponentInChildren<Button>();
-        TMP_Text txt = readyButton.GetComponentInChildren<TMP_Text>();
-        // 유저가 방의 마스터인 경우
-        if (PhotonNetwork.MasterClient.ActorNumber == PhotonNetwork.LocalPlayer.ActorNumber)
-        {
-            txt.text = "시작";
-        }
-        // 참가자인 경우
-        else
-        {
-            readyButton.enabled = true;
-            txt.text = "준비";
-        }
-        userPlays[localPlayerIdx].readyTxt = txt;
+        photonView.RPC("SetPlayerActive", RpcTarget.OthersBuffered, roomName, localPlayerIdx);
+        SetPlayerActive(roomName, localPlayerIdx);
     }
 
     public void OnClickReady()
@@ -140,21 +106,19 @@ public class GameManager : MonoBehaviourPun
         // 유저가 방의 마스터인 경우
         if (PhotonNetwork.MasterClient.ActorNumber == PhotonNetwork.LocalPlayer.ActorNumber)
         {
-            bool isAllReady = PhotonNetwork.CurrentRoom.PlayerCount > 1;
-            foreach (var user in userPlays)
+            if (PhotonNetwork.CurrentRoom.PlayerCount < 2) return;
+            foreach (var player in PhotonNetwork.CurrentRoom.Players)
             {
-                if (user.actorNumber == PhotonNetwork.LocalPlayer.ActorNumber) continue;
-                if (!user.isReady)
-                {
-                    isAllReady = false;
-                    break;
-                }
+                //if (!players[player.Value.ActorNumber].activeSelf)
+                //    continue;
+                if (player.Value.ActorNumber == PhotonNetwork.MasterClient.ActorNumber)
+                    continue;
+                if (!userPlays[player.Value.ActorNumber - 1].isReady) return;
+                Debug.Log("user " + player.Value.ActorNumber + ": " + userPlays[player.Value.ActorNumber - 1].isReady);
             }
-            if (isAllReady)
-            {
-                photonView.RPC("StartGame", RpcTarget.OthersBuffered);
-                StartGame();
-            }
+
+            photonView.RPC("StartGame", RpcTarget.OthersBuffered);
+            StartGame();
         }
         // 참가자인 경우
         else
@@ -181,7 +145,7 @@ public class GameManager : MonoBehaviourPun
         playingField.SetActive(true);
         foreach (var user in userPlays)
         {
-            user.info.text = "x4";
+            user.Value.info.text = "x4";
         }
         turn = 0; // 0번 부터 시작
     }
@@ -191,13 +155,47 @@ public class GameManager : MonoBehaviourPun
     {
         if (!roomName.Equals(room)) return;
         players[playerIdx].SetActive(true);
+
+        if (userPlays.ContainsKey(playerIdx)) return;
+
+        List<GameObject> markers = new();
+        TMP_Text info = null;
+        foreach (var img in players[playerIdx].GetComponentsInChildren<Image>())
+        {
+            if (img.gameObject.name.StartsWith("marker"))
+            {
+                markers.Add(img.gameObject);
+            }
+            else if (img.gameObject.name.Equals("player icon"))
+            {
+                info = img.gameObject.transform.Find("info").GetComponent<TMP_Text>();
+            }
+        }
+
+        // 준비 버튼 설정
+        Button readyButton = startField.GetComponentInChildren<Button>();
+        TMP_Text txt = readyButton.GetComponentInChildren<TMP_Text>();
+        // 유저가 방의 마스터인 경우
+        if (PhotonNetwork.MasterClient.ActorNumber == PhotonNetwork.LocalPlayer.ActorNumber)
+        {
+            txt.text = "시작";
+        }
+        // 참가자인 경우
+        else
+        {
+            readyButton.enabled = true;
+            txt.text = "준비";
+        }
+
+        userPlays.Add(playerIdx, new(markers, new() { false, false, false, false }, new() { }, info, playerIdx + 1));
+        userPlays[playerIdx].readyTxt = txt;
     }
 
     void Update()
     {
         if (!inputField.isFocused && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
             SendButtonOnClicked();
-        
+
         // 게임 진행
         if (isStarted)
         {
